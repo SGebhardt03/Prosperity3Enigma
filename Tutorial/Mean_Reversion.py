@@ -156,8 +156,8 @@ class Trader:
                 sell_power = 50 + int(state.position[product])
             if product == "RAINFOREST_RESIN":
                 # Prüfe, ob es überhaupt eine Position gibt, sonst stürzt Code ab :(
-                orders.append(Order(product, 9999, buy_power))
-                orders.append(Order(product, 10001, -sell_power))
+                orders.append(Order(product, 9998, buy_power))
+                orders.append(Order(product, 10002, -sell_power))
 
             else:
                 # Strategy: always place orders for the best order in the order book depending on acceptable price
