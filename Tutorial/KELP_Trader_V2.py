@@ -3,7 +3,7 @@ import jsonpickle
 import numpy as np
 from typing import Any, List
 
-from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from Round1.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
 
 class Product:

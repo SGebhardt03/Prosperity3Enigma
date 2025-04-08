@@ -2,7 +2,7 @@ import json
 import jsonpickle
 from typing import Any
 
-from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from Round1.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
 
 class Logger:
