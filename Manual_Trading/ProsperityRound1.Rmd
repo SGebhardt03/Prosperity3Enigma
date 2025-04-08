@@ -1,6 +1,6 @@
 ---
 title: "ProsperityRound1"
-output: html_document
+output: rmarkdown::github_document
 date: "2025-04-07"
 ---
 
