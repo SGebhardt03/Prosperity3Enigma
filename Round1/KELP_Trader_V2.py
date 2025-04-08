@@ -26,13 +26,14 @@ PARAMS = {
     Product.KELP: {
         "delta_t":  10,
         "take_width": 1,
-        "clear_width": 0,
+        "clear_width": 0.5,
         "prevent_adverse": True,
         "adverse_volume": 15,
         "reversion_beta": 0,
         "disregard_edge": 1,
         "join_edge": 0,
         "default_edge": 1,
+        "volume_limit": 0
     }
 }
 
@@ -165,8 +166,6 @@ class Trader:
             Product.KELP: 50
         }
 
-
-
     def market_make(
             self,
             product: str,
@@ -292,10 +291,14 @@ class Trader:
                 for price in order_depth.sell_orders.keys()
                 if price > fair_value + 1
             ]
-        )
+        ) if not [
+            price
+            for price in order_depth.sell_orders.keys()
+            if price > fair_value + 1
+            ] == [] else 1000000
         bbbf = max(
             [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
-        )
+        ) if not [price for price in order_depth.buy_orders.keys() if price < fair_value - 1] == [] else 0
 
         if baaf <= fair_value + 2:
             if position <= volume_limit:
@@ -307,6 +310,50 @@ class Trader:
 
         buy_order_volume, sell_order_volume = self.market_make(
             Product.RAINFOREST_RESIN,
+            orders,
+            bbbf + 1,
+            baaf - 1,
+            position,
+            buy_order_volume,
+            sell_order_volume,
+        )
+        return orders, buy_order_volume, sell_order_volume
+
+    def make_kelp_orders(
+            self,
+            order_depth: OrderDepth,
+            fair_value: int,
+            position: int,
+            buy_order_volume: int,
+            sell_order_volume: int,
+            volume_limit: int,
+    ) -> (List[Order], int, int):
+        orders: List[Order] = []
+        baaf = min(
+            [
+                price
+                for price in order_depth.sell_orders.keys()
+                if price > fair_value + 1
+            ]
+        ) if not [
+            price
+            for price in order_depth.sell_orders.keys()
+            if price > fair_value + 1
+            ] == [] else 1000000
+        bbbf = max(
+            [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
+        ) if not [price for price in order_depth.buy_orders.keys() if price < fair_value - 1] == [] else 0
+
+        if baaf <= fair_value + 2:
+            if position <= volume_limit:
+                baaf = fair_value + 3  # still want edge 2 if position is not a concern
+
+        if bbbf >= fair_value - 2:
+            if position >= -volume_limit:
+                bbbf = fair_value - 3  # still want edge 2 if position is not a concern
+
+        buy_order_volume, sell_order_volume = self.market_make(
+            Product.KELP,
             orders,
             bbbf + 1,
             baaf - 1,
@@ -549,15 +596,10 @@ class Trader:
         avg = avg / len(values)
         return avg
 
-    def update_averager(self, product, state, old_average: list, length: int):
+    def update_averager(self, average_value, old_average: list):
         new_average: list = old_average
-        if (len(old_average) == 0):
-            new_average = [Trader.market_price(product, state)]
-        elif (len(old_average) < length):
-            new_average.append(Trader.market_price(product, state))
-        else:
-            new_average.pop(0)
-            new_average.append(Trader.market_price(product, state))
+        new_average.pop(0)
+        new_average.append(average_value)
 
         return new_average
 
@@ -623,32 +665,49 @@ class Trader:
                     pass
                 else:
                     traderObject = np.ones(delta_t) * mid_price
-            else:
-                if mid_price == 0:
-                    mid_price = traderObject[-1]
-            # Regression
-            x = np.linspace(-delta_t, 0, delta_t)
-            coeff = np.polyfit(x, traderObject[-delta_t:], 1)
-            fair_price = coeff[1]
+                    traderObject = traderObject.tolist()
+            elif mid_price == 0:
+                mid_price = traderObject[-1]
+            # Take the historic average price and do MM on that price
+            fair_value = self.calc_averager(traderObject)
 
-            kelp_orders, _, _ = self.make_orders(
+            kelp_take_orders, buy_order_volume, sell_order_volume = (
+                self.take_orders(
                     Product.KELP,
                     state.order_depths[Product.KELP],
-                    fair_price,
+                    fair_value,
+                    self.params[Product.KELP]["take_width"],
                     kelp_position,
-                    0,
-                    0,
-                    1,
-                    0,
-                    1
                 )
+            )
+
+            kelp_clear_orders, buy_order_volume, sell_order_volume = (
+                self.clear_orders(
+                    Product.KELP,
+                    state.order_depths[Product.KELP],
+                    fair_value,
+                    self.params[Product.KELP]["clear_width"],
+                    kelp_position,
+                    buy_order_volume,
+                    sell_order_volume,
+                )
+            )
+
+            kelp_make_orders, _, _ = self.make_kelp_orders(
+                state.order_depths[Product.KELP],
+                fair_value,
+                kelp_position,
+                0,
+                0,
+                self.params[Product.KELP]["volume_limit"],
+            )
 
 
             result[Product.KELP] = (
-                kelp_orders
+                kelp_make_orders
             )
 
-            traderObject = np.append(traderObject, mid_price)
+            traderObject = self.update_averager(mid_price, traderObject)
 
 
 
