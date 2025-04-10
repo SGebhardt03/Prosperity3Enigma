@@ -9,6 +9,8 @@ from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder
 class Product:
     RAINFOREST_RESIN = "RAINFOREST_RESIN"
     KELP = "KELP"
+    SQUID_INK = "SQUID_INK"
+
 
 LIMITS = {
     "RAINFOREST_RESIN": 50,
@@ -24,7 +26,19 @@ PARAMS = {
         "volume_limit": 0,
     },
     Product.KELP: {
-        "delta_t":  10,
+        "delta_t": 10,
+        "take_width": 1,
+        "clear_width": 0.5,
+        "prevent_adverse": True,
+        "adverse_volume": 15,
+        "reversion_beta": 0,
+        "disregard_edge": 1,
+        "join_edge": 0,
+        "default_edge": 1,
+        "volume_limit": 0
+    },
+    Product.SQUID_INK: {
+        "delta_t": 30,
         "take_width": 1,
         "clear_width": 0.5,
         "prevent_adverse": True,
@@ -36,6 +50,7 @@ PARAMS = {
         "volume_limit": 0
     }
 }
+
 
 class Logger:
     def __init__(self) -> None:
@@ -163,7 +178,8 @@ class Trader:
 
         self.LIMIT = {
             Product.RAINFOREST_RESIN: 50,
-            Product.KELP: 50
+            Product.KELP: 50,
+            Product.SQUID_INK: 50
         }
 
     def market_make(
@@ -292,10 +308,10 @@ class Trader:
                 if price > fair_value + 1
             ]
         ) if not [
-            price
-            for price in order_depth.sell_orders.keys()
-            if price > fair_value + 1
-            ] == [] else 1000000
+                     price
+                     for price in order_depth.sell_orders.keys()
+                     if price > fair_value + 1
+                 ] == [] else 1000000
         bbbf = max(
             [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
         ) if not [price for price in order_depth.buy_orders.keys() if price < fair_value - 1] == [] else 0
@@ -336,10 +352,10 @@ class Trader:
                 if price > fair_value + 1
             ]
         ) if not [
-            price
-            for price in order_depth.sell_orders.keys()
-            if price > fair_value + 1
-            ] == [] else 1000000
+                     price
+                     for price in order_depth.sell_orders.keys()
+                     if price > fair_value + 1
+                 ] == [] else 1000000
         bbbf = max(
             [price for price in order_depth.buy_orders.keys() if price < fair_value - 1]
         ) if not [price for price in order_depth.buy_orders.keys() if price < fair_value - 1] == [] else 0
@@ -471,44 +487,7 @@ class Trader:
         )
         return orders, buy_order_volume, sell_order_volume
 
-    def kelp_fair_value(self, order_depth: OrderDepth, traderObject) -> float:
-        if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
-            best_ask = min(order_depth.sell_orders.keys())
-            best_bid = max(order_depth.buy_orders.keys())
-            filtered_ask = [
-                price
-                for price in order_depth.sell_orders.keys()
-                if abs(order_depth.sell_orders[price])
-                   >= self.params[Product.KELP]["adverse_volume"]
-            ]
-            filtered_bid = [
-                price
-                for price in order_depth.buy_orders.keys()
-                if abs(order_depth.buy_orders[price])
-                   >= self.params[Product.KELP]["adverse_volume"]
-            ]
-            mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else None
-            mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else None
-            if mm_ask == None or mm_bid == None:
-                if traderObject.get("kelp_last_price", None) == None:
-                    mmmid_price = (best_ask + best_bid) / 2
-                else:
-                    mmmid_price = traderObject["kelp_last_price"]
-            else:
-                mmmid_price = (mm_ask + mm_bid) / 2
 
-            if traderObject.get("kelp_last_price", None) != None:
-                last_price = traderObject["kelp_last_price"]
-                last_returns = (mmmid_price - last_price) / last_price
-                pred_returns = (
-                        last_returns * self.params[Product.KELP]["reversion_beta"]
-                )
-                fair = mmmid_price + (mmmid_price * pred_returns)
-            else:
-                fair = mmmid_price
-            traderObject["kelp_last_price"] = mmmid_price
-            return fair
-        return None
 
     def make_orders(
             self,
@@ -589,13 +568,6 @@ class Trader:
             return int(mean)
         return 0
 
-    def calc_averager(self, values: list) -> float:
-        avg = 0
-        for price in values:
-            avg += price
-        avg = avg / len(values)
-        return avg
-
     def update_averager(self, average_value, old_average: list):
         new_average: list = old_average
         new_average.pop(0)
@@ -603,9 +575,59 @@ class Trader:
 
         return new_average
 
+    def make_Z_orders(self, order_depth, position, position_limit, buy):
+        orders = []
+        if buy == True:
+            prices = [price for price in order_depth.sell_orders.keys()]
+            if prices == []:
+                return orders
+            price = np.max(prices)
+            buy_power = position_limit - position
+            orders.append(Order(Product.SQUID_INK, int(price), buy_power))
+        else:
+            prices = [price for price in order_depth.buy_orders.keys()]
+            if prices == []:
+                return orders
+            price = np.min(prices)
+            sell_power = position_limit + position
+            orders.append(Order(Product.SQUID_INK, int(price), -sell_power))
+        return orders
+
+    def close_position(self, order_depth, position):
+        orders = []
+        if position > 0:
+            prices = [price for price in order_depth.buy_orders.keys()]
+            if prices == []:
+                return orders
+            price = np.min(prices)
+            orders.append(Order(Product.SQUID_INK, int(price), -position))
+        elif position < 0:
+            prices = [price for price in order_depth.sell_orders.keys()]
+            if prices == []:
+                return orders
+            price = np.max(prices)
+            orders.append(Order(Product.SQUID_INK, int(price), -int(position)))
+        return orders
+
+    def clean_np(self, obj):
+        if isinstance(obj, dict):
+            return {k: self.clean_np(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self.clean_np(x) for x in obj]
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        traderObject = []
+        traderObject = {
+            "KELP": [],
+            "SQUID_INK": []
+        }
         if state.traderData != None and state.traderData != "":
             traderObject = jsonpickle.decode(state.traderData)
 
@@ -660,16 +682,38 @@ class Trader:
             mid_price = self.market_price(Product.KELP, state)
             delta_t = PARAMS[Product.KELP]["delta_t"]
 
-            if len(traderObject) < delta_t:
+            if len(traderObject["KELP"]) < delta_t:
                 if mid_price == 0:
                     pass
                 else:
-                    traderObject = np.ones(delta_t) * mid_price
-                    traderObject = traderObject.tolist()
+                    traderObject["KELP"] = np.ones(delta_t) * mid_price
+                    traderObject["KELP"] = traderObject["KELP"].tolist()
             elif mid_price == 0:
-                mid_price = traderObject[-1]
+                mid_price = traderObject["KELP"][-1]
             # Take the historic average price and do MM on that price
-            fair_value = self.calc_averager(traderObject)
+            fair_value = np.mean(traderObject["KELP"])
+
+            kelp_take_orders, buy_order_volume, sell_order_volume = (
+                self.take_orders(
+                    Product.KELP,
+                    state.order_depths[Product.KELP],
+                    fair_value,
+                    self.params[Product.KELP]["take_width"],
+                    kelp_position,
+                )
+            )
+
+            kelp_clear_orders, buy_order_volume, sell_order_volume = (
+                self.clear_orders(
+                    Product.KELP,
+                    state.order_depths[Product.KELP],
+                    fair_value,
+                    self.params[Product.KELP]["clear_width"],
+                    kelp_position,
+                    buy_order_volume,
+                    sell_order_volume,
+                )
+            )
 
             kelp_make_orders, _, _ = self.make_kelp_orders(
                 state.order_depths[Product.KELP],
@@ -680,24 +724,66 @@ class Trader:
                 self.params[Product.KELP]["volume_limit"],
             )
 
-
             result[Product.KELP] = (
                 kelp_make_orders
             )
 
-            traderObject = self.update_averager(mid_price, traderObject)
+            traderObject["KELP"] = self.update_averager(mid_price, traderObject["KELP"])
 
+        if Product.SQUID_INK in self.params and Product.SQUID_INK in state.order_depths:
+            squid_ink_position = (
+                state.position[Product.SQUID_INK]
+                if Product.SQUID_INK in state.position
+                else 0
+            )
+            mid_price = self.market_price(Product.SQUID_INK, state)
+            delta_t = PARAMS[Product.SQUID_INK]["delta_t"]
 
+            if len(traderObject["SQUID_INK"]) < delta_t:
+                if mid_price == 0:
+                    pass
+                else:
+                    traderObject["SQUID_INK"] = np.ones(delta_t) * mid_price
+                    traderObject["SQUID_INK"] = traderObject["SQUID_INK"].tolist()
+            elif mid_price == 0:
+                mid_price = traderObject["SQUID_INK"][-1]
+
+            mean_price = np.mean(traderObject["SQUID_INK"])
+            std_price = np.std(traderObject["SQUID_INK"])
+
+            if std_price == 0:
+                Z = 0
+            else:
+                Z = (mid_price - mean_price) / std_price
+
+            if Z > 2.5:
+                # Sell overpriced ink
+                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], False)
+            elif Z < -2.5:
+                # Buy underpriced ink
+                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], True)
+            elif np.abs(Z) < 0.5 or np.abs(Z) > 7:
+                # Close position
+                squid_ink_orders = self.close_position(state.order_depths[Product.SQUID_INK], squid_ink_position)
+            else:
+                squid_ink_orders = []
+
+            result[Product.SQUID_INK] = squid_ink_orders
+
+            traderObject["SQUID_INK"] = self.update_averager(mid_price, traderObject["SQUID_INK"])
 
         # --------------------------return value ajustments----------------------------------------------------
         # this will become important later in the game
         conversions = 1
 
-        # logger.flush(state, result, conversions, state.traderData)
+        traderObject = self.clean_np(traderObject)
         # backup the recent version of the logger object
         # trader_data_object["logger"] = logger
         # traderData = jsonpickle.encode(trader_data_object)
 
+        logger.flush(state, result, conversions, traderObject)
         traderData = jsonpickle.encode(traderObject)
+
+
 
         return result, conversions, traderData
