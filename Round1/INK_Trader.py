@@ -38,7 +38,7 @@ PARAMS = {
         "volume_limit": 0
     },
     Product.SQUID_INK: {
-        "delta_t": 30,
+        "delta_t": 15,
         "take_width": 1,
         "clear_width": 0.5,
         "prevent_adverse": True,
@@ -575,22 +575,21 @@ class Trader:
 
         return new_average
 
-    def make_Z_orders(self, order_depth, position, position_limit, buy):
+    def make_Z_orders(self, order_depth, position, position_limit, buy, mid_price):
         orders = []
         if buy == True:
             prices = [price for price in order_depth.sell_orders.keys()]
             if prices == []:
                 return orders
-            price = np.max(prices)
             buy_power = position_limit - position
-            orders.append(Order(Product.SQUID_INK, int(price), buy_power))
+            orders.append(Order(Product.SQUID_INK, int(mid_price), buy_power))
         else:
             prices = [price for price in order_depth.buy_orders.keys()]
             if prices == []:
                 return orders
             price = np.min(prices)
             sell_power = position_limit + position
-            orders.append(Order(Product.SQUID_INK, int(price), -sell_power))
+            orders.append(Order(Product.SQUID_INK, int(mid_price), -sell_power))
         return orders
 
     def close_position(self, order_depth, position):
@@ -609,19 +608,9 @@ class Trader:
             orders.append(Order(Product.SQUID_INK, int(price), -int(position)))
         return orders
 
-    def clean_np(self, obj):
-        if isinstance(obj, dict):
-            return {k: self.clean_np(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self.clean_np(x) for x in obj]
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        else:
-            return obj
+    def is_monotonically_decreasing(self, arr):
+        return np.all(np.diff(arr) <= 0)
+
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         traderObject = {
@@ -756,15 +745,23 @@ class Trader:
             else:
                 Z = (mid_price - mean_price) / std_price
 
-            if Z > 2.5:
+            logger.print("Z-Value:", Z)
+
+            if Z > 0.4:
                 # Sell overpriced ink
-                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], False)
-            elif Z < -2.5:
+                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], False, mid_price)
+            elif Z < -0.4:
                 # Buy underpriced ink
-                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], True)
-            elif np.abs(Z) < 0.5 or np.abs(Z) > 7:
+                squid_ink_orders = self.make_Z_orders(state.order_depths[Product.SQUID_INK], squid_ink_position, LIMITS["SQUID_INK"], True, mid_price)
+            elif np.abs(Z) < 0.1:
                 # Close position
+                logger.print(squid_ink_position)
                 squid_ink_orders = self.close_position(state.order_depths[Product.SQUID_INK], squid_ink_position)
+            elif np.abs(Z) > 0.7:
+                logger.print(squid_ink_position)
+                squid_ink_orders = self.close_position(state.order_depths[Product.SQUID_INK], squid_ink_position)
+                traderObject["SQUID_INK"] = np.ones(delta_t) * mid_price
+                traderObject["SQUID_INK"] = traderObject["SQUID_INK"].tolist()
             else:
                 squid_ink_orders = []
 
@@ -776,7 +773,6 @@ class Trader:
         # this will become important later in the game
         conversions = 1
 
-        traderObject = self.clean_np(traderObject)
         # backup the recent version of the logger object
         # trader_data_object["logger"] = logger
         # traderData = jsonpickle.encode(trader_data_object)
