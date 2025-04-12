@@ -613,12 +613,14 @@ class Trader:
     def make_basket_orders(self, order_depth, position, position_limit, buy, mid_price):
         orders = []
         if buy == True:
+            logger.print("BUY")
             prices = [price for price in order_depth.sell_orders.keys()]
             if prices == []:
                 return orders
             buy_power = position_limit - position
             orders.append(Order(Product.BASKET2, int(mid_price), buy_power))
         else:
+            logger.print("SELL")
             prices = [price for price in order_depth.buy_orders.keys()]
             if prices == []:
                 return orders
@@ -641,6 +643,28 @@ class Trader:
                 return orders
             price = np.max(prices)
             orders.append(Order(Product.BASKET2, int(price), -int(position)))
+        return orders
+
+    def hedge(self, product, order_depth, position, target, limit):
+        orders = []
+        if target > limit:
+            target = limit
+        elif target < -limit:
+            target = -limit
+        if target > position:
+            prices = [price for price in order_depth.sell_orders.keys()]
+            if prices == []:
+                return orders
+            buy_quantity = target - position
+            price = np.max(prices)
+            orders.append(Order(product, int(price), buy_quantity))
+        elif position > target:
+            prices = [price for price in order_depth.buy_orders.keys()]
+            if prices == []:
+                return orders
+            sell_quantity = position - target
+            price = np.min(prices)
+            orders.append(Order(product, int(price), -sell_quantity))
         return orders
 
     def calc_averager(self, values: list) -> float:
@@ -693,11 +717,11 @@ class Trader:
             croissants_mid = self.market_price(Product.CROISSANTS, state)
             jams_mid = self.market_price(Product.JAMS, state)
 
-            basket2_comp = 4 * croissants_mid + 2 * jams_mid + 37
+            basket2_comp = 4 * croissants_mid + 2 * jams_mid + 36.5
 
             logger.print(basket2_mid - basket2_comp)
 
-            if basket2_mid - basket2_comp < 5:
+            if basket2_mid - basket2_comp < -60:
                 basket2_orders = self.make_basket_orders(
                     state.order_depths[Product.BASKET2],
                     basket2_position,
@@ -705,7 +729,8 @@ class Trader:
                     True,
                     basket2_mid
                 )
-            elif basket2_mid - basket2_comp > 5:
+
+            elif basket2_mid - basket2_comp > 60:
                 basket2_orders = self.make_basket_orders(
                     state.order_depths[Product.BASKET2],
                     basket2_position,
@@ -713,7 +738,7 @@ class Trader:
                     False,
                     basket2_mid
                 )
-            elif abs(basket2_mid - basket2_comp) < 1:
+            elif abs(basket2_mid - basket2_comp) < 40:
                 basket2_orders = self.close_position(
                     state.order_depths[Product.BASKET2],
                     basket2_position
@@ -728,6 +753,36 @@ class Trader:
             )
 
             logger.print(result)
+
+            # Hedge
+
+            target_croissants = -4 * basket2_position
+            target_jams = -2 * basket2_position
+
+            croissants_orders = self.hedge(
+                Product.CROISSANTS,
+                state.order_depths[Product.CROISSANTS],
+                croissants_position,
+                target_croissants,
+                LIMITS["CROISSANTS"],
+            )
+
+            jams_orders = self.hedge(
+                Product.JAMS,
+                state.order_depths[Product.JAMS],
+                jams_position,
+                target_jams,
+                LIMITS["JAMS"],
+            )
+
+            result[Product.CROISSANTS] = (
+                croissants_orders
+            )
+
+            result[Product.JAMS] = (
+                jams_orders
+            )
+
 
             # traderObject = self.update_averager(mid_price, traderObject)
 
@@ -745,3 +800,4 @@ class Trader:
         traderData = jsonpickle.encode(traderObject)
 
         return result, conversions, traderData
+
