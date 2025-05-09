@@ -14,7 +14,12 @@ class Product:
     CROISSANTS = "CROISSANTS"
     JAMS = "JAMS"
     DJEMBE = "DJEMBE"
-
+    VOLCANIC_ROCK = "VOLCANIC_ROCK"
+    VOLCANIC_ROCK_VOUCHER_9500 = "VOLCANIC_ROCK_VOUCHER_9500"
+    VOLCANIC_ROCK_VOUCHER_9750 = "VOLCANIC_ROCK_VOUCHER_9750"
+    VOLCANIC_ROCK_VOUCHER_10000 = "VOLCANIC_ROCK_VOUCHER_10000"
+    VOLCANIC_ROCK_VOUCHER_10250 = "VOLCANIC_ROCK_VOUCHER_10250"
+    VOLCANIC_ROCK_VOUCHER_10500 = "VOLCANIC_ROCK_VOUCHER_10500"
 
 LIMITS = {
     "RAINFOREST_RESIN": 50,
@@ -24,7 +29,13 @@ LIMITS = {
     "JAMS": 350,
     "DJEMBE": 60,
     "PICNIC_BASKET1": 60,
-    "PICNIC_BASKET2": 100
+    "PICNIC_BASKET2": 100,
+    "VOLCANIC_ROCK": 400,
+    "VOLCANIC_ROCK_VOUCHER_9500": 200,
+    "VOLCANIC_ROCK_VOUCHER_9750": 200,
+    "VOLCANIC_ROCK_VOUCHER_10000": 200,
+    "VOLCANIC_ROCK_VOUCHER_10250": 200,
+    "VOLCANIC_ROCK_VOUCHER_10500": 200
 }
 
 PARAMS = {
@@ -56,6 +67,24 @@ PARAMS = {
 
     },
     Product.BASKET1: {
+
+    },
+    Product.VOLCANIC_ROCK: {
+        "delta_t": 10
+    },
+    Product.VOLCANIC_ROCK_VOUCHER_9500: {
+
+    },
+    Product.VOLCANIC_ROCK_VOUCHER_9750: {
+
+    },
+    Product.VOLCANIC_ROCK_VOUCHER_10000: {
+
+    },
+    Product.VOLCANIC_ROCK_VOUCHER_10250: {
+
+    },
+    Product.VOLCANIC_ROCK_VOUCHER_10500: {
 
     }
 }
@@ -684,112 +713,376 @@ class Trader:
 
         return new_average
 
+    def implied_volatility(self, C, K, S, t, r=0.0, q=0.0,
+                           option_type='call', tol=1e-8, maxiter=100):
+
+        # helper functions
+        def bs_price(sigma):
+            # Calculation of d1, d2
+            sqrt_t = np.sqrt(t)
+            d1 = (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * t) / (sigma * sqrt_t)
+            d2 = d1 - sigma * sqrt_t
+            # CDF der Normalverteilung
+            N1 = 0.5 * (1.0 + np.math.erf(d1 / np.sqrt(2.0)))
+            N2 = 0.5 * (1.0 + np.math.erf(d2 / np.sqrt(2.0)))
+            if option_type == 'call':
+                return S * np.exp(-q * t) * N1 - K * np.exp(-r * t) * N2
+            else:
+                return K * np.exp(-r * t) * (1.0 - N2) - S * np.exp(-q * t) * (1.0 - N1)
+
+        def bs_vega(sigma):
+            sqrt_t = np.sqrt(t)
+            d1 = (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * t) / (sigma * sqrt_t)
+            # PDF der Normalverteilung
+            pdf = np.exp(-0.5 * d1 ** 2) / np.sqrt(2.0 * np.pi)
+            return S * np.exp(-q * t) * pdf * sqrt_t
+
+        # initial values and bounds
+        sigma_low = 1e-12
+        sigma_high = 5.0
+        price_low = bs_price(sigma_low)
+        price_high = bs_price(sigma_high)
+
+        # Check if solution is in interval (maybe needs a revision)
+        if (price_low - C) * (price_high - C) > 0:
+            return 0
+
+        sigma = np.sqrt(2 * abs((np.log(S / K) + (r - q) * t) / t))  # heuristic initial value
+
+        for i in range(maxiter):
+            price = bs_price(sigma)
+            vega = bs_vega(sigma)
+            diff = price - C
+
+            # Newton-step
+            if vega > 1e-12:
+                sigma_new = sigma - diff / vega
+            else:
+                sigma_new = sigma
+
+            # Bisection if Newton is out of bounds
+            if not (sigma_low < sigma_new < sigma_high):
+                sigma_new = 0.5 * (sigma_low + sigma_high)
+
+            # Update bounds
+            if bs_price(sigma_new) > C:
+                sigma_high = sigma_new
+            else:
+                sigma_low = sigma_new
+
+            # Convergence check
+            if abs(sigma_new - sigma) < tol:
+                return sigma_new
+
+            sigma = sigma_new
+
+        # Warnung if solution does not converge
+        raise RuntimeError('Implicit volatility did not converge after {} iterations.'.format(maxiter))
+
+    @staticmethod
+    def suggest_spreads(strikes, ivs, real_vol, spot, threshold=0.05):
+        """
+        suggest spreads:
+          - bear call spreads if base iv ≥ real_vol * (1 + threshold)
+          - bull call spreads if base iv ≤ real_vol * (1 - threshold)
+
+        Args:
+            strikes (array-like): increasing strike prices.
+            ivs (array-like): implicit volatilities for strikes.
+            real_vol (float): realized volatility of the underlying.
+            spot (float): current spot price.
+            threshold (float): relative threshold (e.g. 0.05 für 5 %).
+
+        Returns:
+            dict: {
+                'base_iv': float,
+                'sell_spreads': list of bear spreads dict,
+                'buy_spreads': list of bull spreads dict
+            }
+        """
+        strikes = np.array(strikes)
+        ivs = np.array(ivs)
+        base_iv = Trader.compute_base_iv(strikes, ivs, spot)
+
+        sell_spreads = []
+        buy_spreads = []
+        N = len(strikes)
+
+        # Bear Call Spreads: Verkaufen, wenn Base IV hoch genug
+        if base_iv >= real_vol * (1 + threshold):
+            for i in range(N):
+                iv_short = ivs[i]
+                # Short-Call IV sollte über real_vol liegen
+                if iv_short <= real_vol:
+                    continue
+                for j in range(i + 1, N):
+                    iv_long = ivs[j]
+                    # Long-Call IV muss niedriger sein
+                    if iv_long >= iv_short:
+                        continue
+                    sell_spreads.append({
+                        'short_strike': strikes[i],
+                        'long_strike': strikes[j],
+                        'iv_short': iv_short,
+                        'iv_long': iv_long,
+                        'iv_premium': iv_short - iv_long,
+                        'strike_width': strikes[j] - strikes[i]
+                    })
+            sell_spreads.sort(key=lambda x: x['iv_premium'], reverse=True)
+
+        # Bull Call Spreads: Kaufen, wenn Base IV niedrig genug
+        if base_iv <= real_vol * (1 - threshold):
+            for i in range(N):
+                iv_long = ivs[i]
+                # Long-Call IV sollte unter real_vol liegen
+                if iv_long >= real_vol:
+                    continue
+                for j in range(i + 1, N):
+                    iv_short = ivs[j]
+                    # Short-Call IV muss höher sein
+                    if iv_short <= iv_long:
+                        continue
+                    buy_spreads.append({
+                        'long_strike': strikes[i],
+                        'short_strike': strikes[j],
+                        'iv_long': iv_long,
+                        'iv_short': iv_short,
+                        'iv_premium': iv_short - iv_long,
+                        'strike_width': strikes[j] - strikes[i]
+                    })
+            buy_spreads.sort(key=lambda x: x['iv_premium'], reverse=True)
+
+        return {
+            'base_iv': base_iv,
+            'sell_spreads': sell_spreads,
+            'buy_spreads': buy_spreads
+        }
+
+    def compute_net_positions(self, spread_recommendations):
+        """
+        Computes the net difference based on spread recommendations.
+
+        Args:
+            spread_recommendations (dict): return of suggest_spreads(), contains 'sell_spreads' und 'buy_spreads'.
+
+        Returns:
+            dict: Mapping Strike (int) -> net position (int), positive for long calls, negative for short calls.
+        """
+        net_positions = {}
+
+        # Bear Call Spreads: sell_spreads enthalten short_strike und long_strike
+        for spread in spread_recommendations.get('sell_spreads', []):
+            short = spread['short_strike']
+            long = spread['long_strike']
+            net_positions[short] = net_positions.get(short, 0) - 1
+            net_positions[long] = net_positions.get(long, 0) + 1
+
+        # Bull Call Spreads: buy_spreads enthalten long_strike und short_strike
+        for spread in spread_recommendations.get('buy_spreads', []):
+            long = spread['long_strike']
+            short = spread['short_strike']
+            net_positions[long] = net_positions.get(long, 0) + 1
+            net_positions[short] = net_positions.get(short, 0) - 1
+
+        return net_positions
+
+    def realized_volatility(self, prices, trading_days=252):
+        """
+        Calculates the realized volatility based on the array prices.
+        """
+        # Conversion in logarithmic returns
+        log_returns = np.diff(np.log(prices))
+
+        daily_vol = np.std(log_returns, ddof=1)  # ddof=1 für Stichproben-Standardabweichung
+
+        # Annualization
+        annualized_vol = daily_vol * np.sqrt(trading_days)
+
+        return annualized_vol
+
+    @staticmethod
+    def compute_base_iv(strikes, ivs, spot):
+        """
+        Calculates the base implied volatility (ATM-IV) as the quadratic fit of the IVs as a function of the moneyness.
+
+        Args:
+            strikes (array-like): array of strike prices.
+            ivs (array-like): array of ivs of strikes.
+            spot (float): spot price of the underlying.
+
+        Returns:
+            float: expected ATM-IV (moneyness = 0).
+        """
+        # Moneyness as log(K/S)
+        m = np.log(np.array(strikes) / spot)
+        y = np.array(ivs)
+        # Quadratic fit: y = a*m^2 + b*m + c -> ATM-IV is c
+        coeffs = np.polyfit(m, y, 2)
+        base_iv = coeffs[-1]
+        return base_iv
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        traderObject = []
+        traderObject = {
+            "KELP": [],
+            "SQUID_INK": [],
+            "VOLCANIC_ROCK": [],
+            "target_portfolio": {
+                "9500": 0,
+                "9750": 0,
+                "10000": 0,
+                "10250": 0,
+                "10500": 0,
+            }
+        }
         if state.traderData != None and state.traderData != "":
             traderObject = jsonpickle.decode(state.traderData)
 
         result = {}
         conversions = 0
-        
-        basket2_tradable = Product.BASKET2 in self.params and Product.BASKET2 in state.order_depths
-        croissants_tradable = Product.CROISSANTS in self.params and Product.CROISSANTS in state.order_depths
-        jams_tradable = Product.JAMS in self.params and Product.JAMS in state.order_depths
 
-        logger.print(basket2_tradable, croissants_tradable, jams_tradable)
+        if Product.VOLCANIC_ROCK in self.params and Product.VOLCANIC_ROCK in state.order_depths:
+            delta_t = PARAMS["VOLCANIC_ROCK"]["delta_t"]
 
-        if basket2_tradable and croissants_tradable and jams_tradable:
-            basket2_position = (
-                state.position[Product.BASKET2]
-                if Product.BASKET2 in state.position
+            volcanic_rock_price = self.market_price(Product.VOLCANIC_ROCK, state)
+
+            if len(traderObject["VOLCANIC_ROCK"]) < delta_t:
+                if volcanic_rock_price == 0:
+                    pass
+                else:
+                    traderObject["VOLCANIC_ROCK"] = np.ones(delta_t) * volcanic_rock_price
+                    traderObject["VOLCANIC_ROCK"] = traderObject["VOLCANIC_ROCK"].tolist()
+            elif volcanic_rock_price == 0:
+                volcanic_rock_price = traderObject["VOLCANIC_ROCK"][-1]
+
+
+            volcanic_rock_position = (
+                state.position[Product.VOLCANIC_ROCK]
+                if Product.VOLCANIC_ROCK in state.position
                 else 0
             )
-            croissants_position = (
-                state.position[Product.CROISSANTS]
-                if Product.CROISSANTS in state.position
-                else 0
-            )
-            jams_position = (
-                state.position[Product.JAMS]
-                if Product.JAMS in state.position
+
+            volcanic_rock_9500_position = (
+                state.position[Product.VOLCANIC_ROCK_VOUCHER_9500]
+                if Product.VOLCANIC_ROCK_VOUCHER_9500 in state.position
                 else 0
             )
 
-            basket2_mid = self.market_price(Product.BASKET2, state)
-            croissants_mid = self.market_price(Product.CROISSANTS, state)
-            jams_mid = self.market_price(Product.JAMS, state)
-
-            basket2_comp = 4 * croissants_mid + 2 * jams_mid + 36.5
-
-            logger.print(basket2_mid - basket2_comp)
-
-            if basket2_mid - basket2_comp < -60:
-                basket2_orders = self.make_basket_orders(
-                    state.order_depths[Product.BASKET2],
-                    basket2_position,
-                    LIMITS["PICNIC_BASKET2"],
-                    True,
-                    basket2_mid
-                )
-
-            elif basket2_mid - basket2_comp > 60:
-                basket2_orders = self.make_basket_orders(
-                    state.order_depths[Product.BASKET2],
-                    basket2_position,
-                    LIMITS["PICNIC_BASKET2"],
-                    False,
-                    basket2_mid
-                )
-            elif abs(basket2_mid - basket2_comp) < 40:
-                basket2_orders = self.close_position(
-                    state.order_depths[Product.BASKET2],
-                    basket2_position
-                )
-            else:
-                basket2_orders = []
-
-
-
-            result[Product.BASKET2] = (
-                basket2_orders
+            volcanic_rock_9750_position = (
+                state.position[Product.VOLCANIC_ROCK_VOUCHER_9750]
+                if Product.VOLCANIC_ROCK_VOUCHER_9750 in state.position
+                else 0
             )
 
-            logger.print(result)
-
-            # Hedge
-
-            target_croissants = -4 * basket2_position
-            target_jams = -2 * basket2_position
-
-            croissants_orders = self.hedge(
-                Product.CROISSANTS,
-                state.order_depths[Product.CROISSANTS],
-                croissants_position,
-                target_croissants,
-                LIMITS["CROISSANTS"],
+            volcanic_rock_10000_position = (
+                state.position[Product.VOLCANIC_ROCK_VOUCHER_10000]
+                if Product.VOLCANIC_ROCK_VOUCHER_10000 in state.position
+                else 0
             )
 
-            jams_orders = self.hedge(
-                Product.JAMS,
-                state.order_depths[Product.JAMS],
-                jams_position,
-                target_jams,
-                LIMITS["JAMS"],
+            volcanic_rock_10250_position = (
+                state.position[Product.VOLCANIC_ROCK_VOUCHER_10250]
+                if Product.VOLCANIC_ROCK_VOUCHER_10250 in state.position
+                else 0
             )
 
-            result[Product.CROISSANTS] = (
-                croissants_orders
-            )
-
-            result[Product.JAMS] = (
-                jams_orders
+            volcanic_rock_10500_position = (
+                state.position[Product.VOLCANIC_ROCK_VOUCHER_10500]
+                if Product.VOLCANIC_ROCK_VOUCHER_10500 in state.position
+                else 0
             )
 
 
-            # traderObject = self.update_averager(mid_price, traderObject)
+            volcanic_rock_9500_price = self.market_price(Product.VOLCANIC_ROCK_VOUCHER_9500, state)
+            volcanic_rock_9750_price = self.market_price(Product.VOLCANIC_ROCK_VOUCHER_9750, state)
+            volcanic_rock_10000_price = self.market_price(Product.VOLCANIC_ROCK_VOUCHER_10000, state)
+            volcanic_rock_10250_price = self.market_price(Product.VOLCANIC_ROCK_VOUCHER_10250, state)
+            volcanic_rock_10500_price = self.market_price(Product.VOLCANIC_ROCK_VOUCHER_10500, state)
+
+            T =  3 #- state.timestamp/1000000
+            volcanic_rock_9500_iv = self.implied_volatility(volcanic_rock_9500_price, volcanic_rock_price, 9500, T)
+            volcanic_rock_9750_iv = self.implied_volatility(volcanic_rock_9750_price, volcanic_rock_price,9750,T)
+            volcanic_rock_10000_iv = self.implied_volatility(volcanic_rock_10000_price, volcanic_rock_price, 10000,T)
+            volcanic_rock_10250_iv = self.implied_volatility(volcanic_rock_10250_price, volcanic_rock_price, 10250,T)
+            volcanic_rock_10500_iv = self.implied_volatility(volcanic_rock_10500_price, volcanic_rock_price, 10500,T)
+
+            strikes = [9500, 9750, 10000, 10250, 10500]
+            ivs = [volcanic_rock_9500_iv, volcanic_rock_9750_iv, volcanic_rock_10000_iv, volcanic_rock_10250_iv, volcanic_rock_10500_iv]
+
+            logger.print("IVs:", ivs)
+
+            volcanic_vol = self.realized_volatility(traderObject["VOLCANIC_ROCK"])
+
+            logger.print("Realized Volatility:", volcanic_vol)
+            suggested_spreads = self.suggest_spreads(strikes, ivs,volcanic_vol  ,volcanic_rock_price)
+            net_positions = self.compute_net_positions(suggested_spreads)
+
+            logger.print(suggested_spreads)
+
+            for strike in net_positions.keys():
+                traderObject["target_portfolio"][strike] = traderObject["target_portfolio"].get(strike, 0) + net_positions[strike]
+            traderObject["VOLCANIC_ROCK"] = self.update_averager(volcanic_rock_price, traderObject["VOLCANIC_ROCK"])
 
 
+            print(traderObject["target_portfolio"])
+            volcanic_rock_9500_orders = self.hedge(
+                Product.VOLCANIC_ROCK_VOUCHER_9500,
+                state.order_depths[Product.VOLCANIC_ROCK_VOUCHER_9500],
+                volcanic_rock_9500_position,
+                traderObject["target_portfolio"]["9500"],
+                LIMITS["VOLCANIC_ROCK_VOUCHER_9500"]
+            )
+
+            volcanic_rock_9750_orders = self.hedge(
+                Product.VOLCANIC_ROCK_VOUCHER_9750,
+                state.order_depths[Product.VOLCANIC_ROCK_VOUCHER_9750],
+                volcanic_rock_9750_position,
+                traderObject["target_portfolio"]["9750"],
+                LIMITS["VOLCANIC_ROCK_VOUCHER_9750"]
+            )
+
+            volcanic_rock_10000_orders = self.hedge(
+                Product.VOLCANIC_ROCK_VOUCHER_10000,
+                state.order_depths[Product.VOLCANIC_ROCK_VOUCHER_10000],
+                volcanic_rock_10000_position,
+                traderObject["target_portfolio"]["10000"],
+                LIMITS["VOLCANIC_ROCK_VOUCHER_10000"]
+            )
+
+            volcanic_rock_10250_orders = self.hedge(
+                Product.VOLCANIC_ROCK_VOUCHER_10250,
+                state.order_depths[Product.VOLCANIC_ROCK_VOUCHER_10250],
+                volcanic_rock_10250_position,
+                traderObject["target_portfolio"]["10250"],
+                LIMITS["VOLCANIC_ROCK_VOUCHER_10250"]
+            )
+
+            volcanic_rock_10500_orders = self.hedge(
+                Product.VOLCANIC_ROCK_VOUCHER_10500,
+                state.order_depths[Product.VOLCANIC_ROCK_VOUCHER_10500],
+                volcanic_rock_10500_position,
+                traderObject["target_portfolio"]["10500"],
+                LIMITS["VOLCANIC_ROCK_VOUCHER_10500"]
+            )
+
+            result[Product.VOLCANIC_ROCK_VOUCHER_9500] = (
+                volcanic_rock_9500_orders
+            )
+
+            result[Product.VOLCANIC_ROCK_VOUCHER_9750] = (
+                volcanic_rock_9750_orders
+            )
+
+            result[Product.VOLCANIC_ROCK_VOUCHER_10000] = (
+                volcanic_rock_10000_orders
+            )
+
+            result[Product.VOLCANIC_ROCK_VOUCHER_10250] = (
+                volcanic_rock_10250_orders
+            )
+
+            result[Product.VOLCANIC_ROCK_VOUCHER_10500] = (
+                volcanic_rock_10500_orders
+            )
 
         # --------------------------return value ajustments----------------------------------------------------
         # this will become important later in the game
