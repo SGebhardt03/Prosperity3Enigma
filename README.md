@@ -41,14 +41,19 @@ Message begins,
 I have discovered a strategy which will make ArchiCapital the biggest trading company ever. Here's how my thesis goes,
 
 t: Timestamp
+
 St: Voucher Underlying Price at t
+
 K: Strike
+
 TTE: Remaining Time till expiry at t
+
 Vt: Voucher price of strike K at t
 
 Compute,
 
 m_t = log(K/St)/ sqrt(TTE)
+
 v_t = BlackScholes ImpliedVol(St, Vt, K, TTE)
 
 for each t, plot v_t vs m_t and fit a parabolic curve to filter random noise.
@@ -57,7 +62,7 @@ This fitted v_t(m_t) allows me to evaluate opportunities between different strik
 
 Message ends."
 
-
+We discovered that the base IV is in the mean roughly about 5 % lower than the actual IV on the market. Therefore we traded spreads based on this assumption.
 </details>
 
 
@@ -67,3 +72,5 @@ Message ends."
 </details>
 
 # Result
+
+Unfortunately, many team members had little time this year due to university commitments. As a result, we were unable to implement all the strategies in time. Nevertheless, we were quite successful. We came 197th overall out of over 12 thousand teams and 3rd in Switzerland.
